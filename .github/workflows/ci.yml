@@ -1,0 +1,91 @@
+name: Storent CI Core Pipeline
+
+on:
+    push:
+        branches: [ main, develop ]
+    pull_request:
+        branches: [ main, develop ]
+
+jobs:
+    code-style:
+        name: Style & Lint Checking
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout Code
+              uses: actions/checkout@v4
+
+            - name: Setup PHP Environment
+              uses: shivammathur/setup-php@v2
+              with:
+                  php-version: '8.3'
+                  extensions: mbstring, xml, zip
+                  tools: composer:v2
+
+            - name: Install dependencies
+              run: composer install --no-progress --prefer-dist
+
+            - name: Run Code Style Check
+              run: ./vendor/bin/pint --test
+
+    static-analysis:
+        name: Larastan Level 9 Check
+        runs-on: ubuntu-latest
+        needs: [code-style]
+        steps:
+            - name: Checkout Code
+              uses: actions/checkout@v4
+
+            - name: Setup PHP Environment
+              uses: shivammathur/setup-php@v2
+              with:
+                  php-version: '8.3'
+                  extensions: mbstring, intl, xml, json, zip
+                  tools: composer:v2
+
+            - name: Install dependencies
+              run: composer install --no-progress --prefer-dist
+
+            - name: Run PHPStan Analysis
+              run: ./vendor/bin/phpstan analyse -c phpstan.neon
+
+    integration-tests:
+        name: Database and Feature Testing
+        runs-on: ubuntu-latest
+        needs: [static-analysis]
+        services:
+            mysql:
+                image: mysql:8.0
+                env:
+                    MYSQL_ROOT_PASSWORD: password
+                    MYSQL_DATABASE: storent_testing
+                ports:
+                    - 3306:3306
+                options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
+            redis:
+                image: redis:alpine
+                ports:
+                    - 6379:6379
+                options: --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=3
+        steps:
+            - name: Checkout Code
+              uses: actions/checkout@v4
+
+            - name: Setup PHP Environment
+              uses: shivammathur/setup-php@v2
+              with:
+                  php-version: '8.3'
+                  extensions: mbstring, pdo_mysql, intl, xml, json, zip, redis
+                  tools: composer:v2
+
+            - name: Copy Testing Environment
+              run: cp .env.testing .env
+
+            - name: Install dependencies
+              run: composer install --no-progress --prefer-dist
+
+            - name: Run Migrations
+              run: php artisan migrate --env=testing
+
+            - name: Run Pest Tests
+              run: ./vendor/bin/pest --parallel --coverage
